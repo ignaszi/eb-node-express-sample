@@ -1,5 +1,22 @@
 // Include the cluster module
 var cluster = require('cluster');
+const assert = require('assert');
+
+function callbackHandler(res, err, data) {
+    if (!err) {
+        res.status(201).end();
+        console.log('DDB written');
+    }
+    const returnStatus = (err.code === 'ConditionalCheckFailedException') ? 409 : 500;
+    res.status(returnStatus).end();
+    if (data) {
+        res.send(data);
+        console.log('data:');
+        console.log(data);
+    }
+    console.log('DDB Error: ' + err);
+    console.log('stach' + err.stack);
+}
 
 // Code to run if we're in the master process
 if (cluster.isMaster) {
@@ -26,18 +43,33 @@ if (cluster.isMaster) {
     var AWS = require('aws-sdk');
     var express = require('express');
     var bodyParser = require('body-parser');
+    var path = require('path');
 
     AWS.config.region = process.env.REGION
-
-    var sns = new AWS.SNS();
-    var ddb = new AWS.DynamoDB();
+    const PLAYER_TABLE = "PlayerTable";
 
     var ddbTable =  process.env.STARTUP_SIGNUP_TABLE;
-    var snsTopic =  process.env.NEW_SIGNUP_TOPIC;
     var app = express();
 
+    let ddb;
+    if (process.env.TEST) {
+        const ep = new AWS.Endpoint('localhost');
+        ep.port = 8000;
+        ddb = new AWS.DynamoDB({endpoint: ep});
+        // note the shallow equality check
+        assert.equal(ddb.service.endpoint.hostname, 'awsproxy.example.com');
+        assert.equal(ddb.service.endpoint.port, 8000);
+        app.use('/static', express.static(path.join(__dirname, 'static')));
+        app.use('/views', express.static(path.join(__dirname, 'views')));
+    }
+    else {
+        ddb = new AWS.DynamoDB();
+    }
+
     app.set('view engine', 'ejs');
-    app.set('views', __dirname + '/views');
+    if (! process.env.TEST) {
+        app.set('views', __dirname + '/views');
+    }
     app.use(bodyParser.urlencoded({extended:false}));
 
     app.get('/', function(req, res) {
@@ -48,6 +80,27 @@ if (cluster.isMaster) {
         });
     });
 
+    app.post('/newgame', function(req, res) {
+        const item  = {
+            'player' : { 'S': res.body.player }
+        }
+        ddb.putItem({'TableName': PLAYER_TABLE,
+                     'Item': item,
+                     'Expected': { player: { Exists: false } } }
+                     , callbackHandler.bind(null, res));
+    });
+
+    app.get('/games', function(req, res) {
+        var params = {
+            ExpressionAttributeNames: {
+             "PLAYER": "player"
+            },
+            ProjectionExpression: "#PLAYER", 
+            TableName: PLAYER_TABLE
+           };
+        dynamodb.scan(params, callbackHandler.bind(null, res));
+    });
+
     app.post('/signup', function(req, res) {
         var item = {
             'email': {'S': req.body.email},
@@ -55,38 +108,11 @@ if (cluster.isMaster) {
             'preview': {'S': req.body.previewAccess},
             'theme': {'S': req.body.theme}
         };
-
         ddb.putItem({
             'TableName': ddbTable,
             'Item': item,
             'Expected': { email: { Exists: false } }        
-        }, function(err, data) {
-            if (err) {
-                var returnStatus = 500;
-
-                if (err.code === 'ConditionalCheckFailedException') {
-                    returnStatus = 409;
-                }
-
-                res.status(returnStatus).end();
-                console.log('DDB Error: ' + err);
-            } else {
-                sns.publish({
-                    'Message': 'Name: ' + req.body.name + "\r\nEmail: " + req.body.email 
-                                        + "\r\nPreviewAccess: " + req.body.previewAccess 
-                                        + "\r\nTheme: " + req.body.theme,
-                    'Subject': 'New user sign up!!!',
-                    'TopicArn': snsTopic
-                }, function(err, data) {
-                    if (err) {
-                        res.status(500).end();
-                        console.log('SNS Error: ' + err);
-                    } else {
-                        res.status(201).end();
-                    }
-                });            
-            }
-        });
+        }, callbackHandler.bind(null, res));            
     });
 
     var port = process.env.PORT || 3000;
