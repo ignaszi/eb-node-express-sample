@@ -2,20 +2,27 @@
 var cluster = require('cluster');
 const assert = require('assert');
 
-function callbackHandler(res, err, data) {
+function callbackHandler(res, successCode, err, data) {
+    if (process.env.TEST) {
+        console.log(err);
+        console.log(data);
+    }
     if (!err) {
-        res.status(201).end();
-        console.log('DDB written');
+        res.status(successCode).end();
+        return;
     }
     const returnStatus = (err.code === 'ConditionalCheckFailedException') ? 409 : 500;
-    res.status(returnStatus).end();
+    res.status(returnStatus);
     if (data) {
         res.send(data);
         console.log('data:');
         console.log(data);
     }
+    else {
+        res.end();
+    }
     console.log('DDB Error: ' + err);
-    console.log('stach' + err.stack);
+    console.log('stack' + err.stack);
 }
 
 // Code to run if we're in the master process
@@ -45,20 +52,21 @@ if (cluster.isMaster) {
     var bodyParser = require('body-parser');
     var path = require('path');
 
-    AWS.config.region = process.env.REGION
-    const PLAYER_TABLE = "PlayerTable";
+    const PLAYER_TABLE = "Players";
 
+    AWS.config.region = process.env.REGION || 'eu-west-2';
+
+    console.log(AWS.config.region);
     var ddbTable =  process.env.STARTUP_SIGNUP_TABLE;
     var app = express();
 
     let ddb;
     if (process.env.TEST) {
-        const ep = new AWS.Endpoint('localhost');
-        ep.port = 8000;
-        ddb = new AWS.DynamoDB({endpoint: ep});
+        ddb = new AWS.DynamoDB({ endpoint: new AWS.Endpoint('http://localhost:8000') });
+        ddb.listTables(function (err, data) { console.log('listTables',err,data); });
         // note the shallow equality check
-        assert.equal(ddb.service.endpoint.hostname, 'awsproxy.example.com');
-        assert.equal(ddb.service.endpoint.port, 8000);
+        assert.equal(ddb.endpoint.hostname, 'localhost');
+        assert.equal(ddb.endpoint.port, 8000);
         app.use('/static', express.static(path.join(__dirname, 'static')));
         app.use('/views', express.static(path.join(__dirname, 'views')));
     }
@@ -81,24 +89,45 @@ if (cluster.isMaster) {
     });
 
     app.post('/newgame', function(req, res) {
-        const item  = {
-            'player' : { 'S': res.body.player }
+        if (process.env.TEST) {
+            console.log('/newgame request body:');
+            console.log(req.body);
+            console.log('/newgame request data:');
+            console.log(req.data);
         }
-        ddb.putItem({'TableName': PLAYER_TABLE,
-                     'Item': item,
-                     'Expected': { player: { Exists: false } } }
-                     , callbackHandler.bind(null, res));
+        const player = req.body.player;
+        if (!player) {
+            res.status(400)
+            res.send({Error : "Player name was not provided!"})
+            return;
+        }
+        const item  = {
+            'player' : { 'S': player }
+        }
+        ddb.putItem({
+            'TableName': PLAYER_TABLE,
+            'Item': item//,
+            //'Expected': { "player": { Exists: false } }
+        } , callbackHandler.bind(null, res, 201));
     });
 
     app.get('/games', function(req, res) {
+        if (process.env.TEST) console.log('/games');
         var params = {
-            ExpressionAttributeNames: {
-             "PLAYER": "player"
-            },
-            ProjectionExpression: "#PLAYER",
+            ProjectionExpression: "player",
             TableName: PLAYER_TABLE
            };
-        dynamodb.scan(params, callbackHandler.bind(null, res));
+        ddb.scan(params, function(err, data) {
+            if (process.env.TEST) {
+                console.log(err);
+                console.log(data);
+            }
+            if (err) {
+                res.status(400).end();
+                return;
+            }
+            res.send(data.Items);
+        });
     });
 
     app.post('/signup', function(req, res) {
@@ -112,7 +141,7 @@ if (cluster.isMaster) {
             'TableName': ddbTable,
             'Item': item,
             'Expected': { email: { Exists: false } }
-        }, callbackHandler.bind(null, res));
+        }, callbackHandler.bind(null, res, 201));
     });
 
     var port = process.env.PORT || 3000;
