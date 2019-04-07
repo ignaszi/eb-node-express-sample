@@ -1,5 +1,5 @@
 aws dynamodb create-table \
-    --table-name Players \
+    --table-name Games \
     --attribute-definitions \
         AttributeName=player,AttributeType=S \
     --key-schema AttributeName=player,KeyType=HASH \

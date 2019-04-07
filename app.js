@@ -11,8 +11,12 @@ function callbackHandler(res, successCode, err, data) {
         res.status(successCode).end();
         return;
     }
-    const returnStatus = (err.code === 'ConditionalCheckFailedException') ? 409 : 500;
-    res.status(returnStatus);
+    if (err.code === 'ConditionalCheckFailedException') {
+        res.status(409);
+        res.send({"Error": "Player is already registered"});
+        return;
+    }
+    res.status(500);
     if (data) {
         res.send(data);
         console.log('data:');
@@ -52,7 +56,7 @@ if (cluster.isMaster) {
     var bodyParser = require('body-parser');
     var path = require('path');
 
-    const PLAYERS_TABLE = "Players";
+    const GAMES = "Games";
 
     AWS.config.region = process.env.REGION || 'eu-west-2';
 
@@ -88,7 +92,7 @@ if (cluster.isMaster) {
         });
     });
 
-    app.post('/newgame', function(req, res) {
+    app.post('/game', function(req, res) {
         if (process.env.TEST) {
             console.log('/newgame request body:');
             console.log(req.body);
@@ -100,23 +104,26 @@ if (cluster.isMaster) {
             return;
         }
         const item  = {
-            'player' : { 'S': player }
+            'player'    : { 'S': player },
+            'started'   : { 'BOOL' : true },
+            'gameState': { 'S':'---------'}
         }
         ddb.putItem({
-            'TableName': PLAYERS_TABLE,
-            'Item': item//,
-            //'Expected': { "player": { Exists: false } }
+            'TableName': GAMES,
+            'Item': item,
+            'Expected': { "player": { Exists: false } }
         } , callbackHandler.bind(null, res, 201));
     });
 
-    app.delete('/deletegame', function(req, res) {
+    app.delete('/game', function(req, res) {
         if (process.env.TEST) {
             console.log('/deletegame request body:')
             console.log(req.body);
         }
         const params = {
-            TableName: PLAYERS_TABLE,
-            Key: {'player': { 'S' : req.body.player } }
+            TableName: GAMES,
+            Key: {'player': { 'S' : req.body.player } },
+            ReturnValues: 'ALL_OLD'
         };
         ddb.deleteItem(params, function(err, data) {
             if (process.env.TEST) {
@@ -128,16 +135,21 @@ if (cluster.isMaster) {
                 return;
             }
             res.status(200);
-            res.send({Deleted : req.body.player});
+            const payload = data.Attributes ? {Deleted : data.Attributes.player.S} : {};
+            res.send(payload);
         });
     });
 
     app.get('/games', function(req, res) {
         if (process.env.TEST) console.log('/games');
         var params = {
-            ProjectionExpression: "player",
-            TableName: PLAYERS_TABLE
+            ProjectionExpression: "player, started, gameState",
+            TableName: GAMES
            };
+        if (!req.body.all) {
+            params.FilterExpression = "started = :strt";
+            params.ExpressionAttributeValues = {":strt": {"BOOL": false }};
+        }
         ddb.scan(params, function(err, data) {
             if (process.env.TEST) {
                 console.log(err);
