@@ -95,7 +95,7 @@ if (cluster.isMaster) {
             ExpressionAttributeNames: {
              "PLAYER": "player"
             },
-            ProjectionExpression: "#PLAYER", 
+            ProjectionExpression: "#PLAYER",
             TableName: PLAYER_TABLE
            };
         dynamodb.scan(params, callbackHandler.bind(null, res));
@@ -111,8 +111,8 @@ if (cluster.isMaster) {
         ddb.putItem({
             'TableName': ddbTable,
             'Item': item,
-            'Expected': { email: { Exists: false } }        
-        }, callbackHandler.bind(null, res));            
+            'Expected': { email: { Exists: false } }
+        }, callbackHandler.bind(null, res));
     });
 
     var port = process.env.PORT || 3000;
