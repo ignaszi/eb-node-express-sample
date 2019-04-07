@@ -29,6 +29,13 @@ function callbackHandler(res, successCode, err, data) {
     console.log('stack' + err.stack);
 }
 
+function transformState(gameState, index, xturn) {
+    const toInsert = xturn ? 'X' : 'O';
+    const prefix = gameState.substr(0, index) + toInsert;
+    const complete = prefix + gameState.substr(index + toInsert.length);
+    return complete;
+}
+
 // Code to run if we're in the master process
 if (cluster.isMaster) {
 
@@ -99,14 +106,15 @@ if (cluster.isMaster) {
         }
         const player = req.body.player;
         if (!player) {
-            res.status(400)
-            res.send({Error : "Player name was not provided!"})
+            res.status(400);
+            res.send({Error : "Player name was not provided!"});
             return;
         }
         const item  = {
-            'player'    : { 'S': player },
-            'started'   : { 'BOOL' : true },
-            'gameState': { 'S':'---------'}
+            'player'   : { 'S': player },
+            'started'  : { 'BOOL' : false },
+            'gameState': { 'S':'---------'},
+            'xturn'    : { 'BOOL' : true}
         }
         ddb.putItem({
             'TableName': GAMES,
@@ -143,12 +151,12 @@ if (cluster.isMaster) {
     app.get('/games', function(req, res) {
         if (process.env.TEST) console.log('/games');
         var params = {
-            ProjectionExpression: "player, started, gameState",
+            ProjectionExpression: "player, started, gameState, xturn",
             TableName: GAMES
-           };
-        if (!req.body.all) {
+        };
+        if (!req.query.all) {
             params.FilterExpression = "started = :strt";
-            params.ExpressionAttributeValues = {":strt": {"BOOL": false }};
+            params.ExpressionAttributeValues = {":strt": {"BOOL": false } };
         }
         ddb.scan(params, function(err, data) {
             if (process.env.TEST) {
@@ -160,6 +168,101 @@ if (cluster.isMaster) {
                 return;
             }
             res.send(data.Items);
+        });
+    });
+
+    app.get('/gamestate', function(req, res) {
+        if (process.env.TEST) {
+            console.log('/gamesstate');
+            console.log(req.query);
+        }
+        var params = {
+            TableName: GAMES,
+            Key: {"player" : {"S": req.query.player} },
+            ProjectionExpression: "gameState"
+        };
+        ddb.getItem(params, function(err, data) {
+            if (process.env.TEST) {
+                console.log(err);
+                console.log(data);
+            }
+            if (err) {
+                res.status(400).end();
+                return;
+            }
+            if (data.Item) {
+                res.status(200);
+                res.send(data.Item.gameState.S);
+            }
+            else {
+                res.status(204).end();
+            }
+        });
+    });
+
+    app.post('/move', function(req, res) {
+        if (process.env.TEST) {
+            console.log('/move');
+            console.log(req.body);
+        }
+        if (req.body.player === undefined || req.body.xturn === undefined || req.body.coord === undefined) {
+            res.status(400);
+            res.send({"Error": "player, coord and xturn need to be specified"});
+            return;
+        }
+        if (!(req.body.xturn === 'true' || req.body.xturn === 'false')) {
+            res.status(400);
+            res.send({"Error": `xturn can either be string "true" value or "false" value but is ${req.body.xturn}`});
+            return;
+        }
+        const xturnBool = req.body.xturn === 'true';
+        const params = {
+            TableName: GAMES,
+            Key: {"player" : {"S": req.body.player} },
+        };
+        ddb.getItem(params, function(err, data) {
+            if (process.env.TEST) {
+                console.log(err);
+                console.log(data);
+            }
+            if (err) {
+                res.status(400).end();
+                return;
+            }
+            if (data.Item) {
+                if (data.Item.xturn.BOOL == xturnBool) {
+                    const updatedState = transformState(data.Item.gameState.S, parseInt(req.body.coord), xturnBool);
+                    data.Item.gameState.S = updatedState;
+                    data.Item.xturn.BOOL = !data.Item.xturn.BOOL;
+                    const params2 = {
+                        TableName: GAMES,
+                        Item : data.Item
+                    };
+                    if (process.env.TEST) {
+                        console.log(params2);
+                    }
+                    ddb.putItem(params2, function(err, data) {
+                        if (err) {
+                            console.log(err);
+                            res.status(500).end();
+                            return;
+                        }
+                        res.status(200);
+                        if (process.env.TEST) {
+                            console.log(data);
+                        }
+                        res.send(data);
+                    });
+                }
+                else {
+                    res.status(400);
+                    res.send({"Error": "Wrong turn"});
+                    return;
+                }
+            }
+            else {
+                res.status(204).end();
+            }
         });
     });
 
