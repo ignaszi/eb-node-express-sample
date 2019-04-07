@@ -52,7 +52,7 @@ if (cluster.isMaster) {
     var bodyParser = require('body-parser');
     var path = require('path');
 
-    const PLAYER_TABLE = "Players";
+    const PLAYERS_TABLE = "Players";
 
     AWS.config.region = process.env.REGION || 'eu-west-2';
 
@@ -92,8 +92,6 @@ if (cluster.isMaster) {
         if (process.env.TEST) {
             console.log('/newgame request body:');
             console.log(req.body);
-            console.log('/newgame request data:');
-            console.log(req.data);
         }
         const player = req.body.player;
         if (!player) {
@@ -105,17 +103,40 @@ if (cluster.isMaster) {
             'player' : { 'S': player }
         }
         ddb.putItem({
-            'TableName': PLAYER_TABLE,
+            'TableName': PLAYERS_TABLE,
             'Item': item//,
             //'Expected': { "player": { Exists: false } }
         } , callbackHandler.bind(null, res, 201));
+    });
+
+    app.delete('/deletegame', function(req, res) {
+        if (process.env.TEST) {
+            console.log('/deletegame request body:')
+            console.log(req.body);
+        }
+        const params = {
+            TableName: PLAYERS_TABLE,
+            Key: {'player': { 'S' : req.body.player } }
+        };
+        ddb.deleteItem(params, function(err, data) {
+            if (process.env.TEST) {
+                console.log(err);
+                console.log(data);
+            }
+            if (err) {
+                res.status(400).end();
+                return;
+            }
+            res.status(200);
+            res.send({Deleted : req.body.player});
+        });
     });
 
     app.get('/games', function(req, res) {
         if (process.env.TEST) console.log('/games');
         var params = {
             ProjectionExpression: "player",
-            TableName: PLAYER_TABLE
+            TableName: PLAYERS_TABLE
            };
         ddb.scan(params, function(err, data) {
             if (process.env.TEST) {
